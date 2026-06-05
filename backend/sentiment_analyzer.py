@@ -3,9 +3,13 @@ from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 import requests
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 analyzer = SentimentIntensityAnalyzer()
-NEWS_API_KEY = "7d98ec73d5fb4058869876b5f0bf02a8"
+NEWS_API_KEY = os.getenv("NEWS_API_KEY", "")
 
 def similar(a, b):
     return SequenceMatcher(None, a, b).ratio()

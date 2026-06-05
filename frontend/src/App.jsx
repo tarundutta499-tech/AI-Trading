@@ -6,7 +6,7 @@ import NewsFeed from './components/NewsFeed';
 import ExplainablePanel from './components/ExplainablePanel';
 import Meters from './components/Meters';
 
-const API_URL = 'http://127.0.0.1:8000';
+const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
 
 function App() {
   const [data, setData] = useState({ top_signals: [], all_signals: [], positions: [], heatmap: [], news: [] });
