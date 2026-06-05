@@ -12,6 +12,7 @@ function App() {
   const [data, setData] = useState({ top_signals: [], all_signals: [], positions: [], heatmap: [], news: [] });
   const [loading, setLoading] = useState(true);
   const [forceRunStatus, setForceRunStatus] = useState('');
+  const [liveTrading, setLiveTrading] = useState(false);
   const [selectedSignal, setSelectedSignal] = useState(null);
   const [activeTab, setActiveTab] = useState('dashboard');
 
@@ -30,8 +31,19 @@ function App() {
     }
   };
 
+  const fetchSettings = async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/settings`);
+      const json = await res.json();
+      setLiveTrading(json.live_trading);
+    } catch (err) {
+      console.error("Error fetching settings:", err);
+    }
+  };
+
   useEffect(() => {
     fetchDashboard();
+    fetchSettings();
     const interval = setInterval(fetchDashboard, 30000); // refresh every 30s
     return () => clearInterval(interval);
   }, []);
@@ -47,6 +59,20 @@ function App() {
     }
   };
 
+  const handleToggleLiveTrading = async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/settings/live-trading`, { method: 'POST' });
+      const json = await res.json();
+      if (json.error) {
+        alert(json.error);
+      } else {
+        setLiveTrading(json.live_trading);
+      }
+    } catch (err) {
+      alert("Failed to toggle live trading.");
+    }
+  };
+
   return (
     <div className="app-container">
       <header>
@@ -55,6 +81,15 @@ function App() {
           <p className="text-muted">Indian Equity Markets (NSE) • Indicative Signals Only</p>
         </div>
         <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+          <button 
+            onClick={handleToggleLiveTrading}
+            style={{
+              background: liveTrading ? 'var(--danger)' : 'var(--primary)',
+              color: 'white', border: 'none', padding: '0.5rem 1rem', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold'
+            }}
+          >
+            {liveTrading ? '🔴 Live Trading Active' : '🟢 Simulator Mode'}
+          </button>
           <span className="text-muted">{forceRunStatus}</span>
           <button className="btn" onClick={handleForceRun}>Force Run Analysis</button>
         </div>

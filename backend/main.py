@@ -12,6 +12,7 @@ from indicator_calc import calculate_indicators
 from sentiment_analyzer import get_news_sentiment
 from signal_generator import generate_signals
 from portfolio_manager import update_portfolio
+from broker_angelone import broker as angel_broker
 
 import logging
 from datetime import datetime, timezone
@@ -221,6 +222,34 @@ def get_portfolio(db: Session = Depends(get_db)):
         "positions": positions
     }
 
+@app.get("/api/settings")
+def get_settings(db: Session = Depends(get_db)):
+    live_trading = db.query(SystemSettings).filter(SystemSettings.key == "live_trading").first()
+    is_live = live_trading.value == "true" if live_trading else False
+    return {"live_trading": is_live}
+
+@app.post("/api/settings/live-trading")
+def toggle_live_trading(db: Session = Depends(get_db)):
+    live_trading = db.query(SystemSettings).filter(SystemSettings.key == "live_trading").first()
+    if not live_trading:
+        live_trading = SystemSettings(key="live_trading", value="true")
+        db.add(live_trading)
+    else:
+        live_trading.value = "false" if live_trading.value == "true" else "true"
+        
+    is_live = live_trading.value == "true"
+    
+    # Try connecting to Angel One if turning ON
+    if is_live:
+        connected = angel_broker.connect()
+        if not connected:
+            live_trading.value = "false"
+            db.commit()
+            return {"error": "Failed to connect to Angel One. Check your .env credentials."}
+            
+    db.commit()
+    return {"message": f"Live trading is now {'ON' if is_live else 'OFF'}", "live_trading": is_live}
+
 class TradeRequest(BaseModel):
     ticker: str
     shares: int = None
@@ -253,6 +282,15 @@ def buy_stock(req: TradeRequest, db: Session = Depends(get_db)):
     if shares_to_buy == 0:
         return {"error": "Quantity must be at least 1"}
         
+    is_live = db.query(SystemSettings).filter(SystemSettings.key == "live_trading").first()
+    
+    if is_live and is_live.value == "true":
+        # Route to Angel One
+        res = angel_broker.place_order(req.ticker.replace(".NS", ""), shares_to_buy, "BUY")
+        if not res["status"]:
+            return {"error": res["message"]}
+        # For simulator tracking, we still save it in DB
+    
     cost = shares_to_buy * price
     if cash < cost:
         return {"error": f"Not enough cash. Cost is {cost:.2f} but you have {cash:.2f}"}
@@ -279,7 +317,8 @@ def buy_stock(req: TradeRequest, db: Session = Depends(get_db)):
         db.add(new_pos)
         
     db.commit()
-    return {"message": f"Bought {shares_to_buy} shares of {req.ticker}"}
+    msg = f"LIVE ORDER: Bought {shares_to_buy} shares of {req.ticker}" if (is_live and is_live.value == "true") else f"Bought {shares_to_buy} shares of {req.ticker}"
+    return {"message": msg}
 
 @app.post("/api/portfolio/sell")
 def sell_stock(req: TradeRequest, db: Session = Depends(get_db)):
@@ -298,6 +337,13 @@ def sell_stock(req: TradeRequest, db: Session = Depends(get_db)):
     except:
         price = position.current_price
         
+    is_live = db.query(SystemSettings).filter(SystemSettings.key == "live_trading").first()
+    
+    if is_live and is_live.value == "true":
+        res = angel_broker.place_order(req.ticker.replace(".NS", ""), shares_to_sell, "SELL")
+        if not res["status"]:
+            return {"error": res["message"]}
+
     revenue = shares_to_sell * price
     
     cash_setting = db.query(SystemSettings).filter(SystemSettings.key == "cash_balance").first()
@@ -311,4 +357,5 @@ def sell_stock(req: TradeRequest, db: Session = Depends(get_db)):
         
     db.commit()
     
-    return {"message": f"Sold {shares_to_sell} shares of {req.ticker} for {revenue:.2f}"}
+    msg = f"LIVE ORDER: Sold {shares_to_sell} shares of {req.ticker}" if (is_live and is_live.value == "true") else f"Sold {shares_to_sell} shares of {req.ticker} for {revenue:.2f}"
+    return {"message": msg}
