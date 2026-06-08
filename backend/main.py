@@ -5,7 +5,7 @@ from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy.orm import Session
 
 from database import engine, Base, get_db
-from models import SignalHistory, PortfolioPosition, MarketNews, SystemSettings
+from models import SignalHistory, PortfolioPosition, MarketNews, SystemSettings, BacktestSession, BacktestTrade
 from tickers import NIFTY_TICKERS, MARKET_INDEX
 from data_fetcher import get_stock_data, get_fundamentals, get_index_data, clear_index_cache
 from indicator_calc import calculate_indicators
@@ -13,10 +13,12 @@ from sentiment_analyzer import get_news_sentiment
 from signal_generator import generate_signals
 from portfolio_manager import update_portfolio
 from broker_angelone import broker as angel_broker
-
+from backtester import run_backtest
+from intraday_engine import start_intraday_scheduler
 import logging
 from datetime import datetime, timezone
 from pydantic import BaseModel
+from typing import Optional
 import yfinance as yf
 
 Base.metadata.create_all(bind=engine)
@@ -125,9 +127,30 @@ scheduler.add_job(
 )
 scheduler.start()
 
+intraday_scheduler = start_intraday_scheduler()
+
+@app.on_event("startup")
+def startup_event():
+    from database import SessionLocal
+    db = SessionLocal()
+    try:
+        live_trading = db.query(SystemSettings).filter(SystemSettings.key == "live_trading").first()
+        if live_trading and live_trading.value == "true":
+            logger.info("Restoring Angel One connection on startup...")
+            connected = angel_broker.connect()
+            if not connected:
+                logger.error("Failed to connect to Angel One on startup. Disabling live trading.")
+                live_trading.value = "false"
+                db.commit()
+    except Exception as e:
+        logger.error(f"Error connecting to Angel One on startup: {e}")
+    finally:
+        db.close()
+
 @app.on_event("shutdown")
 def shutdown_event():
     scheduler.shutdown()
+    intraday_scheduler.shutdown()
 
 @app.get("/api/dashboard")
 def get_dashboard(db: Session = Depends(get_db)):
@@ -250,6 +273,22 @@ def toggle_live_trading(db: Session = Depends(get_db)):
     db.commit()
     return {"message": f"Live trading is now {'ON' if is_live else 'OFF'}", "live_trading": is_live}
 
+@app.get("/api/settings/paper")
+def get_paper_settings(db: Session = Depends(get_db)):
+    auto = db.query(SystemSettings).filter(SystemSettings.key == "auto_paper_trade").first()
+    return {"auto_paper_trade": auto.value == "true" if auto else False}
+
+@app.post("/api/settings/paper/toggle")
+def toggle_paper_settings(db: Session = Depends(get_db)):
+    auto = db.query(SystemSettings).filter(SystemSettings.key == "auto_paper_trade").first()
+    if not auto:
+        auto = SystemSettings(key="auto_paper_trade", value="true")
+        db.add(auto)
+    else:
+        auto.value = "false" if auto.value == "true" else "true"
+    db.commit()
+    return {"auto_paper_trade": auto.value == "true"}
+
 class TradeRequest(BaseModel):
     ticker: str
     shares: int = None
@@ -359,3 +398,140 @@ def sell_stock(req: TradeRequest, db: Session = Depends(get_db)):
     
     msg = f"LIVE ORDER: Sold {shares_to_sell} shares of {req.ticker}" if (is_live and is_live.value == "true") else f"Sold {shares_to_sell} shares of {req.ticker} for {revenue:.2f}"
     return {"message": msg}
+
+class BacktestRequest(BaseModel):
+    ticker: str
+    initial_capital: float = 100000.0
+    years: int = 1
+    trailing_stop_pct: Optional[float] = None
+
+@app.post("/api/backtest/run")
+def api_run_backtest(req: BacktestRequest, db: Session = Depends(get_db)):
+    session_id = run_backtest(req.ticker, req.initial_capital, req.years, req.trailing_stop_pct)
+    session = db.query(BacktestSession).filter(BacktestSession.id == session_id).first()
+    trades = db.query(BacktestTrade).filter(BacktestTrade.session_id == session_id).all()
+    return {
+        "session": session,
+        "trades": trades
+    }
+
+from models import GoldenScreenerResult
+@app.get("/api/screener/results")
+def get_screener_results(db: Session = Depends(get_db)):
+    today = datetime.now(timezone.utc).date()
+    results = db.query(GoldenScreenerResult).filter(GoldenScreenerResult.date == today).order_by(GoldenScreenerResult.profit_factor.desc()).all()
+    
+    # If empty, maybe the screener hasn't run today, just grab the most recent day's results
+    if not results:
+        latest_res = db.query(GoldenScreenerResult).order_by(GoldenScreenerResult.date.desc()).first()
+        if latest_res:
+            results = db.query(GoldenScreenerResult).filter(GoldenScreenerResult.date == latest_res.date).order_by(GoldenScreenerResult.profit_factor.desc()).all()
+            
+    return results
+
+from optimizer import optimize_strategy
+class OptimizeRequest(BaseModel):
+    ticker: str
+    years: int = 3
+    trailing_stop_pct: float = 10.0
+
+@app.post("/api/optimize")
+def api_optimize(req: OptimizeRequest):
+    res = optimize_strategy(req.ticker, req.years, req.trailing_stop_pct)
+    return res
+
+@app.get("/api/chart/{ticker}")
+def get_chart_data(ticker: str):
+    try:
+        stock = yf.Ticker(ticker)
+        df = stock.history(period="1y")
+        if df.empty:
+            return []
+        
+        # Format for lightweight-charts: time (YYYY-MM-DD), open, high, low, close
+        data = []
+        for index, row in df.iterrows():
+            data.append({
+                "time": index.strftime('%Y-%m-%d'),
+                "open": row["Open"],
+                "high": row["High"],
+                "low": row["Low"],
+                "close": row["Close"]
+            })
+        return data
+    except Exception as e:
+        return {"error": str(e)}
+
+from models import IntradaySignal
+from intraday_engine import INTRADAY_TICKERS, analyze_intraday_ticker
+
+@app.get("/api/intraday/analyze/{ticker}")
+def analyze_custom_intraday_ticker(ticker: str):
+    try:
+        signal_data = analyze_intraday_ticker(ticker)
+        if not signal_data:
+            return {"error": "Failed to fetch intraday data"}
+            
+        import json
+        return {
+            "ticker": signal_data['ticker'],
+            "signal": signal_data['signal'],
+            "score": round(signal_data['score'], 2),
+            "current_price": round(signal_data['current_price'], 2) if signal_data.get('current_price') else None,
+            "vwap": round(signal_data['vwap'], 2) if signal_data['vwap'] else None,
+            "rsi_5m": round(signal_data['rsi_5m'], 2) if signal_data['rsi_5m'] else None,
+            "macd_histogram": round(signal_data['macd_histogram'], 2) if signal_data['macd_histogram'] else None,
+            "reasons": json.loads(signal_data['reasons']) if isinstance(signal_data['reasons'], str) else signal_data['reasons'],
+            "warnings": json.loads(signal_data['warnings']) if isinstance(signal_data['warnings'], str) else signal_data['warnings'],
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/api/intraday/signals")
+def get_intraday_signals(db: Session = Depends(get_db)):
+    signals = []
+    for ticker in INTRADAY_TICKERS:
+        latest = db.query(IntradaySignal).filter(IntradaySignal.ticker == ticker).order_by(IntradaySignal.id.desc()).first()
+        if latest:
+            import json
+            signals.append({
+                "ticker": latest.ticker,
+                "signal": latest.signal,
+                "score": round(latest.score, 2),
+                "current_price": round(latest.current_price, 2) if latest.current_price else None,
+                "vwap": round(latest.vwap, 2) if latest.vwap else None,
+                "rsi_5m": round(latest.rsi_5m, 2) if latest.rsi_5m else None,
+                "macd_histogram": round(latest.macd_histogram, 2) if latest.macd_histogram else None,
+                "reasons": json.loads(latest.reasons) if latest.reasons else [],
+                "warnings": json.loads(latest.warnings) if latest.warnings else [],
+                "timestamp": latest.timestamp
+            })
+            
+    signals.sort(key=lambda x: x["score"], reverse=True)
+    return signals
+
+@app.get("/api/intraday/chart/{ticker}")
+def get_intraday_chart(ticker: str):
+    try:
+        stock = yf.Ticker(ticker)
+        df = stock.history(period="5d", interval="5m")
+        if df.empty:
+            return []
+            
+        data = []
+        for index, row in df.iterrows():
+            data.append({
+                "time": int(index.timestamp()), # Return unix timestamp for 5m intraday charts
+                "open": row["Open"],
+                "high": row["High"],
+                "low": row["Low"],
+                "close": row["Close"]
+            })
+        return data
+    except Exception as e:
+        return {"error": str(e)}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

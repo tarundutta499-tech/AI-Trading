@@ -69,4 +69,11 @@ def calculate_indicators(df):
     # Volatility / Returns for Risk score
     df['Daily_Return'] = df['Close'].pct_change()
     
+    # Pre-calculate Worst_Drawdown and Rolling_Volatility for backtesting optimization
+    max_high = df['High'].rolling(window=252, min_periods=1).max()
+    dd = ((df['Close'] - max_high) / max_high) * 100
+    df['Worst_Drawdown'] = dd.expanding().min()
+    
+    df['Rolling_Volatility'] = df['Daily_Return'].rolling(window=252, min_periods=1).std() * np.sqrt(252) * 100
+    
     return df

@@ -20,7 +20,7 @@ def dynamic_weighting(scores, standard_weights):
             
     return composite
 
-def generate_signals(ticker, df, fundamentals, sentiment_stats, market_df, sector_df):
+def generate_signals(ticker, df, fundamentals, sentiment_stats, market_df, sector_df, is_backtest=False, buy_threshold=65, sell_threshold=35):
     if df is None or len(df) == 0:
         return None
         
@@ -106,18 +106,24 @@ def generate_signals(ticker, df, fundamentals, sentiment_stats, market_df, secto
         warnings.append("Fundamental data unavailable (N/A)")
         
     # 3. SENT SCORE
-    sent_score = sentiment_stats['sentiment_score']
+    sent_score = sentiment_stats['sentiment_score'] if sentiment_stats else 50
     if sent_score > 60: reasons.append("Positive News Sentiment")
     elif sent_score < 40: warnings.append("Negative News Sentiment")
     
     # 4. RISK SCORE
     drawdown = 0
     if len(df) > 200:
-        max_high = df['High'].rolling(252, min_periods=1).max()
-        dd = ((df['Close'] - max_high) / max_high).min() * 100
-        drawdown = abs(dd)
+        if 'Worst_Drawdown' in df.columns and pd.notna(latest.get('Worst_Drawdown')):
+            drawdown = abs(latest['Worst_Drawdown'])
+        else:
+            max_high = df['High'].rolling(252, min_periods=1).max()
+            dd = ((df['Close'] - max_high) / max_high).min() * 100
+            drawdown = abs(dd)
     
-    volatility = df['Daily_Return'].std() * np.sqrt(252) * 100 if 'Daily_Return' in df.columns else 20
+    if 'Rolling_Volatility' in df.columns and pd.notna(latest.get('Rolling_Volatility')):
+        volatility = latest['Rolling_Volatility']
+    else:
+        volatility = df['Daily_Return'].std() * np.sqrt(252) * 100 if 'Daily_Return' in df.columns else 20
     beta = fundamentals.get("beta", 1.0) if fundamentals else 1.0
     beta = beta if beta is not None else 1.0
     
@@ -181,16 +187,22 @@ def generate_signals(ticker, df, fundamentals, sentiment_stats, market_df, secto
         if composite_score > 65:
             composite_score = 64
             
-    if composite_score > 65: signal = "BUY"
-    elif composite_score >= 40: signal = "HOLD"
-    else: signal = "SELL"
+    if is_backtest:
+        composite_score = tech_score
+        if composite_score > buy_threshold: signal = "BUY"
+        elif composite_score < sell_threshold: signal = "SELL"
+        else: signal = "HOLD"
+    else:
+        if composite_score > buy_threshold: signal = "BUY"
+        elif composite_score >= 40: signal = "HOLD" # Hardcoded safety for live
+        else: signal = "SELL"
     
     # Confidence Score
     conf = 100
     if fund_score is None: conf -= 15
     if market_df is None: conf -= 5
     if sector_df is None: conf -= 5
-    if sent_score == 50 and sentiment_stats.get('positive_articles', 0) == 0: conf -= 10
+    if sent_score == 50 and (sentiment_stats.get('positive_articles', 0) if sentiment_stats else 0) == 0: conf -= 10
     
     if fund_score is not None:
         diff = abs(tech_score - fund_score)

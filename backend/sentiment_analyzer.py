@@ -2,35 +2,26 @@ import urllib.parse
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
-import requests
-import os
-from dotenv import load_dotenv
-
-load_dotenv()
+import feedparser
+from email.utils import parsedate_to_datetime
 
 analyzer = SentimentIntensityAnalyzer()
-NEWS_API_KEY = os.getenv("NEWS_API_KEY", "")
 
 def similar(a, b):
     return SequenceMatcher(None, a, b).ratio()
 
 def get_news_sentiment(ticker_symbol):
     clean_ticker = ticker_symbol.replace(".NS", "")
-    # Search for the company name strictly
-    query = urllib.parse.quote(f'"{clean_ticker}"')
+    query = urllib.parse.quote(f'"{clean_ticker}" stock market')
     
-    url = f"https://newsapi.org/v2/everything?q={query}&sortBy=publishedAt&language=en&apiKey={NEWS_API_KEY}"
+    # Free, unlimited Google News RSS feed for India
+    url = f"https://news.google.com/rss/search?q={query}&hl=en-IN&gl=IN&ceid=IN:en"
     
     try:
-        response = requests.get(url, timeout=10)
-        data = response.json()
-        
-        if data.get("status") != "ok" or not data.get("articles"):
-            return {"sentiment_score": 50, "positive_articles": 0, "neutral_articles": 0, "negative_articles": 0}, []
-            
-        articles = data["articles"]
+        feed = feedparser.parse(url)
+        articles = feed.entries
     except Exception as e:
-        print(f"News API Error for {ticker_symbol}: {e}")
+        print(f"Google News RSS Error for {ticker_symbol}: {e}")
         return {"sentiment_score": 50, "positive_articles": 0, "neutral_articles": 0, "negative_articles": 0}, []
         
     recent_news = []
@@ -50,10 +41,11 @@ def get_news_sentiment(ticker_symbol):
             break
             
         try:
-            # News API timestamp format: 2024-03-01T12:00:00Z
-            pub_date_str = entry.get("publishedAt", "")
+            pub_date_str = entry.get("published", "")
             if pub_date_str:
-                pub_date = datetime.strptime(pub_date_str, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                pub_date = parsedate_to_datetime(pub_date_str)
+                if pub_date.tzinfo is None:
+                    pub_date = pub_date.replace(tzinfo=timezone.utc)
             else:
                 pub_date = datetime.now(timezone.utc)
         except Exception:
@@ -61,7 +53,7 @@ def get_news_sentiment(ticker_symbol):
             
         if pub_date >= cutoff_time:
             title = entry.get("title") or ""
-            description = entry.get("description") or ""
+            # Google news titles often end with " - Publisher Name". We can leave it for sentiment context.
             
             if not title or title == "[Removed]":
                 continue
@@ -78,8 +70,8 @@ def get_news_sentiment(ticker_symbol):
                 
             unique_titles.append(title)
             
-            # Combine title and description for more robust sentiment analysis
-            full_text = f"{title}. {description}"
+            # Combine title for sentiment analysis
+            full_text = title
             sentiment = analyzer.polarity_scores(full_text)
             compound = sentiment['compound']
             
@@ -95,8 +87,8 @@ def get_news_sentiment(ticker_symbol):
             
             recent_news.append({
                 "title": title,
-                "link": entry.get("url", ""),
-                "published": entry.get("publishedAt", ""),
+                "link": entry.get("link", ""),
+                "published": entry.get("published", ""),
                 "sentiment": compound,
                 "ticker": ticker_symbol
             })

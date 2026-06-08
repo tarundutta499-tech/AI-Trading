@@ -5,6 +5,10 @@ import Heatmap from './components/Heatmap';
 import NewsFeed from './components/NewsFeed';
 import ExplainablePanel from './components/ExplainablePanel';
 import Meters from './components/Meters';
+import TradingChart from './components/TradingChart';
+import BacktestingPanel from './components/BacktestingPanel';
+import ScreenerPanel from './components/ScreenerPanel';
+import IntradayPanel from './components/IntradayPanel';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
 
@@ -124,6 +128,27 @@ function App() {
         >
           Market Heatmap
         </button>
+        <button 
+          className={`btn ${activeTab === 'backtesting' ? '' : 'btn-secondary'}`} 
+          style={{ background: activeTab === 'backtesting' ? 'var(--primary)' : 'transparent', border: activeTab === 'backtesting' ? 'none' : '1px solid var(--border)', color: activeTab === 'backtesting' ? 'white' : 'var(--text-muted)' }}
+          onClick={() => setActiveTab('backtesting')}
+        >
+          Backtesting
+        </button>
+        <button 
+          className={`btn ${activeTab === 'screener' ? '' : 'btn-secondary'}`} 
+          style={{ background: activeTab === 'screener' ? 'var(--primary)' : 'transparent', border: activeTab === 'screener' ? 'none' : '1px solid var(--border)', color: activeTab === 'screener' ? 'white' : 'var(--text-muted)' }}
+          onClick={() => setActiveTab('screener')}
+        >
+          Golden Screener
+        </button>
+        <button 
+          className={`btn ${activeTab === 'intraday' ? '' : 'btn-secondary'}`} 
+          style={{ background: activeTab === 'intraday' ? 'linear-gradient(45deg, #ff416c, #ff4b2b)' : 'transparent', border: activeTab === 'intraday' ? 'none' : '1px solid var(--border)', color: activeTab === 'intraday' ? 'white' : 'var(--text-muted)' }}
+          onClick={() => setActiveTab('intraday')}
+        >
+          Intraday (F&O)
+        </button>
       </div>
 
       {loading ? (
@@ -152,6 +177,7 @@ function App() {
                       ))}
                     </select>
                   </div>
+                  <TradingChart ticker={selectedSignal?.ticker} />
                   <Meters signalData={selectedSignal} />
                   <ExplainablePanel signalData={selectedSignal} />
                   <div className="glass-card">
@@ -182,7 +208,7 @@ function App() {
             <div className="grid-full">
               <NewsFeed newsData={data.news} />
             </div>
-          ) : (
+          ) : activeTab === 'heatmap' ? (
             <div className="grid-full">
               <Heatmap 
                 heatmapData={data.heatmap} 
@@ -194,6 +220,18 @@ function App() {
                   }
                 }} 
               />
+            </div>
+          ) : activeTab === 'screener' ? (
+            <div className="grid-full">
+              <ScreenerPanel />
+            </div>
+          ) : activeTab === 'intraday' ? (
+            <div className="grid-full">
+              <IntradayPanel />
+            </div>
+          ) : (
+            <div className="grid-full">
+              <BacktestingPanel />
             </div>
           )}
         </>

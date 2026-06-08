@@ -52,15 +52,23 @@ def get_fundamentals(ticker_symbol):
         earnings_in_3_days = False
         
         calendar = ticker.calendar
-        if calendar is not None and not calendar.empty:
+        if calendar is not None:
             try:
-                if 'Earnings Date' in calendar.index:
-                    dates = calendar.loc['Earnings Date'].values
-                    if len(dates) > 0 and pd.notnull(dates[0]):
-                        next_earnings = pd.to_datetime(dates[0]).tz_localize(None)
+                # Handle both dict (newer yfinance) and DataFrame (older yfinance)
+                if isinstance(calendar, dict):
+                    if 'Earnings Date' in calendar and len(calendar['Earnings Date']) > 0:
+                        next_earnings = pd.to_datetime(calendar['Earnings Date'][0]).tz_localize(None)
                         days_to_earnings = (next_earnings - datetime.now()).days
                         if 0 <= days_to_earnings <= 3:
                             earnings_in_3_days = True
+                elif not calendar.empty:
+                    if 'Earnings Date' in calendar.index:
+                        dates = calendar.loc['Earnings Date'].values
+                        if len(dates) > 0 and pd.notnull(dates[0]):
+                            next_earnings = pd.to_datetime(dates[0]).tz_localize(None)
+                            days_to_earnings = (next_earnings - datetime.now()).days
+                            if 0 <= days_to_earnings <= 3:
+                                earnings_in_3_days = True
             except Exception as ex:
                 print(f"Error parsing earnings for {ticker_symbol}: {ex}")
 

@@ -7,6 +7,7 @@ export default function Portfolio() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [sellQuantities, setSellQuantities] = useState({});
+  const [autoTrade, setAutoTrade] = useState(false);
 
   const fetchPortfolio = async () => {
     try {
@@ -21,9 +22,32 @@ export default function Portfolio() {
     }
   };
 
+  const fetchSettings = async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/settings/paper`);
+      if (res.ok) {
+        const data = await res.json();
+        setAutoTrade(data.auto_paper_trade);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   useEffect(() => {
     fetchPortfolio();
+    fetchSettings();
   }, []);
+
+  const toggleAutoTrade = async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/settings/paper/toggle`, { method: 'POST' });
+      const data = await res.json();
+      setAutoTrade(data.auto_paper_trade);
+    } catch (err) {
+      alert("Failed to toggle auto trading.");
+    }
+  };
 
   const handleSell = async (ticker, maxShares) => {
     const qtyToSell = sellQuantities[ticker] ? Number(sellQuantities[ticker]) : maxShares;
@@ -57,6 +81,28 @@ export default function Portfolio() {
 
   return (
     <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '1rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+        <h2>Paper Trading Simulator</h2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          <span className="text-muted">Auto-Execute Live Signals:</span>
+          <button 
+            onClick={toggleAutoTrade}
+            style={{
+              background: autoTrade ? 'var(--success)' : 'var(--bg-card)',
+              color: 'white',
+              border: '1px solid var(--border)',
+              padding: '0.5rem 1.5rem',
+              borderRadius: '20px',
+              cursor: 'pointer',
+              fontWeight: 'bold',
+              transition: 'all 0.3s'
+            }}
+          >
+            {autoTrade ? 'ON' : 'OFF'}
+          </button>
+        </div>
+      </div>
+
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1.5rem', marginBottom: '2rem' }}>
         <div className="glass-card text-center" style={{ padding: '2rem' }}>
           <h3 className="text-muted" style={{ marginBottom: '0.5rem' }}>Available Cash</h3>
