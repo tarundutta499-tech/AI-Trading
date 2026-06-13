@@ -23,10 +23,18 @@ function App() {
   const fetchDashboard = async () => {
     try {
       const res = await fetch(`${API_URL}/api/dashboard`);
+      if (!res.ok) {
+        throw new Error(`HTTP error! status: ${res.status}`);
+      }
       const json = await res.json();
-      setData(json);
-      if (json.top_signals.length > 0 && !selectedSignal) {
-        setSelectedSignal(json.top_signals[0]);
+      
+      if (json && Array.isArray(json.top_signals)) {
+        setData(json);
+        if (json.top_signals.length > 0 && !selectedSignal) {
+          setSelectedSignal(json.top_signals[0]);
+        }
+      } else {
+        console.error("Invalid data format received:", json);
       }
       setLoading(false);
     } catch (err) {
